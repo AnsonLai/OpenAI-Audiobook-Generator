@@ -94,47 +94,101 @@ function generateAudiobook() {
     var rateLimitPerMinute = 50;
     var delayBetweenCalls = 60000 / rateLimitPerMinute; // Delay in ms
 
+    function writeString(view, offset, string) {
+        for (var i = 0; i < string.length; i++) {
+            view.setUint8(offset + i, string.charCodeAt(i));
+        }
+    }
+
     function processQueue() {
         if (queue.length === 0) return; // Stop if the queue is empty
-
         var index = segments.length - queue.length;
         var segment = queue.shift(); // Get the next segment from the queue
-
-        callOpenAIAPI(segment, apiKey, function (audioBlob) {
-            audioBlobs[index] = audioBlob;
+        
+        if (segment.match(/\n{2,}/)) {
+            var silentDuration = (segment.match(/\n/g).length - 1) * 0.25; // 0.25 seconds of silence per double newline
+            var sampleRate = 44100;
+            var numChannels = 2;
+            var bitsPerSample = 16;
+            var dataSize = Math.floor(silentDuration * sampleRate * numChannels * bitsPerSample / 8);
+            
+            var buffer = new ArrayBuffer(44 + dataSize);
+            var view = new DataView(buffer);
+            
+            // RIFF identifier
+            writeString(view, 0, 'RIFF');
+            // file length
+            view.setUint32(4, 36 + dataSize, true);
+            // RIFF type
+            writeString(view, 8, 'WAVE');
+            // format chunk identifier
+            writeString(view, 12, 'fmt ');
+            // format chunk length
+            view.setUint32(16, 16, true);
+            // sample format (raw)
+            view.setUint16(20, 1, true);
+            // channel count
+            view.setUint16(22, numChannels, true);
+            // sample rate
+            view.setUint32(24, sampleRate, true);
+            // byte rate
+            view.setUint32(28, sampleRate * numChannels * bitsPerSample / 8, true);
+            // block align
+            view.setUint16(32, numChannels * bitsPerSample / 8, true);
+            // bits per sample
+            view.setUint16(34, bitsPerSample, true);
+            // data chunk identifier
+            writeString(view, 36, 'data');
+            // data chunk length
+            view.setUint32(40, dataSize, true);
+            
+            audioBlobs[index] = new Blob([view], { type: 'audio/wav' });
             progressBar.value = audioBlobs.filter(Boolean).length;
-
-            if (audioBlobs.filter(Boolean).length === segments.length) {
-                // All segments are loaded, merge them!
-                mergeAudioBlobsAndDownload(audioBlobs);
-            } else {
-                setTimeout(processQueue, delayBetweenCalls); // Process the next segment after a delay
-            }
-        });
+            
+            setTimeout(processQueue, delayBetweenCalls); // Process the next segment after a delay
+        } else {
+            callOpenAIAPI(segment, apiKey, function (audioBlob) {
+                audioBlobs[index] = audioBlob;
+                progressBar.value = audioBlobs.filter(Boolean).length;
+                if (audioBlobs.filter(Boolean).length === segments.length) {
+                    // All segments are loaded, merge them!
+                    mergeAudioBlobsAndDownload(audioBlobs);
+                } else {
+                    setTimeout(processQueue, delayBetweenCalls); // Process the next segment after a delay
+                }
+            });
+        }
     }
 
     // Start processing the queue
     processQueue();
 }
 
-
 function splitTextIntoSegments(text, maxLength) {
     var segments = [];
     var currentSegment = '';
-
-    text.split('. ').forEach(sentence => {
-        if (currentSegment.length + sentence.length > maxLength) {
-            segments.push(currentSegment);
-            currentSegment = '';
+    text.split(/(\n{2,})/).forEach(part => {
+        if (part.match(/\n{2,}/)) {
+            if (currentSegment.trim() !== '') {
+                segments.push(currentSegment);
+                currentSegment = '';
+            }
+            segments.push(part);
+        } else {
+            var sentences = part.split('. ');
+            sentences.forEach(sentence => {
+                if (currentSegment.length + sentence.length > maxLength) {
+                    segments.push(currentSegment);
+                    currentSegment = '';
+                }
+                currentSegment += sentence + '. ';
+            });
         }
-        currentSegment += sentence + '. ';
     });
-
     // Add the last segment if it's not empty
     if (currentSegment.trim() !== '') {
         segments.push(currentSegment);
     }
-
     return segments;
 }
 
@@ -159,7 +213,7 @@ function callOpenAIAPI(segment, apiKey, callback) {
     console.log(segment);
 
     var data = JSON.stringify({
-        "model": "tts-1",
+        "model": document.getElementById("model").value,
         "input": segment,
         "voice": document.getElementById("voice").value
     });
@@ -171,13 +225,20 @@ document.addEventListener('DOMContentLoaded', function () {
     var textInput = document.getElementById('text-input');
     var fileUpload = document.getElementById('file-upload');
     var costDisplay = document.getElementById('cost-estimate-display');
+    var modelSelect = document.getElementById('model');
 
     fileUpload.addEventListener('change', handleFileUpload);
     textInput.addEventListener('input', calculateCost);
+    modelSelect.addEventListener('change', calculateCost);
 
     function calculateCost() {
         var textLength = textInput.value.length;
-        var cost = (textLength / 1000) * 0.015;
+        if (document.getElementById("model").value == "tts-1") {
+            var cost = (textLength / 1000) * 0.015;
+        } else {
+            var cost = (textLength / 1000) * 0.030;
+        }
+        
         costDisplay.textContent = 'Estimated Cost for Conversion: $' + cost.toFixed(2);
     }
 
