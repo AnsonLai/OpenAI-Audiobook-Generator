@@ -1,5 +1,9 @@
 # Text-to-Audio Converter / Audiobook Creator
 
+## FORK OVERVIEW
+
+Very minor modifications made to allow for selection between Standard and HD TTS models.  Also added some silent delay to the audio if there are several newlines between text (i.e. between title and text).
+
 ## Important Notes
 
 - **No Liability:** This project is provided as is, without any guarantees or warranty. The author is not liable for any damages or losses arising from the use or performance of this software.
